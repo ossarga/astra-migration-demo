@@ -1,0 +1,116 @@
+version: '3.9'
+
+x-baseservice: &baseservice-core
+  restart: unless-stopped
+  tty: true
+  privileged: true
+  networks:
+    proxy:
+  volumes:
+    - ./share:/run/share/
+    - /run/docker.sock:/run/docker.sock
+
+networks:
+  proxy:
+    name: proxy
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: $NETWORK_SUBNET
+
+services:
+  baseservice:
+    <<: *baseservice-core
+    build: ./services/baseservice
+    image: baseservice:latest
+
+  origin-cassandra:
+    <<: *baseservice-core
+    build: ./services/origin-cassandra
+    environment:
+      - DOCKER_HOST=unix:///run/docker.sock
+      - CASSANDRA_CLUSTER_NAME='origin_cluster'
+      - CASSANDRA_NUM_TOKENS=16
+      - CASSANDRA_DC=datacenter1
+      - CASSANDRA_ENDPOINT_SNITCH=GossipingPropertyFileSnitch
+      - CASSANDRA_AUTHENTICATOR=PasswordAuthenticator
+      - CASSANDRA_AUTHORIZER=CassandraAuthorizer
+      - ADMIN_ROLE_NAME=$ORIGIN_ADMIN_ROLE_NAME
+      - ADMIN_ROLE_PASSWORD=$ORIGIN_ADMIN_ROLE_PASSWORD
+      - CLIENT_ROLE_NAME=$ORIGIN_CLIENT_ROLE_NAME
+      - CLIENT_ROLE_PASSWORD=$ORIGIN_CLIENT_ROLE_PASSWORD
+      - ZDMPROXY_ROLE_NAME=$ORIGIN_ZDMPROXY_ROLE_NAME
+      - ZDMPROXY_ROLE_PASSWORD=$ORIGIN_ZDMPROXY_ROLE_PASSWORD
+
+  target-cassandra:
+    <<: *baseservice-core
+    image: cassandra:4.0
+    environment:
+      - DOCKER_HOST=unix:///run/docker.sock
+      - CASSANDRA_CLUSTER_NAME='target_cluster'
+      - CASSANDRA_DC=datacenter1
+      - CASSANDRA_ENDPOINT_SNITCH=GossipingPropertyFileSnitch
+
+  target-astra:
+    <<: *baseservice-core
+    build: ./services/target-astra
+    environment:
+      - DOCKER_HOST=unix:///run/docker.sock
+      - ASTRA_ADMIN_TOKEN=$ASTRA_ADMIN_TOKEN
+      - ASTRA_DB_NAME=$TARGET_ASTRA_DB_NAME
+      - REVOKE_TOKEN_IF_EXISTS=true
+
+  zdmproxy:
+    <<: *baseservice-core
+    build: ./services/zdmproxy
+    deploy:
+      mode: replicated
+      replicas: $PROXY_DEPLOY_REPLICAS
+    environment:
+      - DOCKER_HOST=unix:///run/docker.sock
+      - ZDM_PROXY_CONFIGURATION_UPDATE_FILE_PATH=/run/share/zdmproxy_config_updates
+      - ZDM_ORIGIN_CONNECTION_TYPE=$ORIGIN_CONNECTION_TYPE
+      - ZDM_ORIGIN_PORT=9042
+      - ZDM_ORIGIN_DB_CREDENTIALS_FILE_PATH=/run/share/origin_zdmproxy_credentials
+      - ZDM_TARGET_CONNECTION_TYPE=$TARGET_CONNECTION_TYPE
+      - ZDM_TARGET_INIT_TOKEN_FILE_PATH=/run/share/target_zdmproxy_token
+      - ZDM_TARGET_DB_CREDENTIALS_FILE_PATH=/run/share/target_zdmproxy_credentials
+
+  cqlproxy:
+    <<: *baseservice-core
+    build: ./services/cqlproxy
+    environment:
+      - DOCKER_HOST=unix:///run/docker.sock
+      - DATABASE_SERVICE=target
+      - DATABASE_CONNECTION_TYPE=$TARGET_CONNECTION_TYPE
+
+  client:
+    build: ./services/client
+    restart: unless-stopped
+    environment:
+      - ORIGIN_CONNECTION_TYPE=$ORIGIN_CONNECTION_TYPE
+      - ORIGIN_DB_CREDENTIALS_FILE_PATH=/run/share/origin_client_credentials
+      - TARGET_CONNECTION_TYPE=$TARGET_CONNECTION_TYPE
+      - TARGET_INIT_TOKEN_FILE_PATH=/run/share/target_zdmproxy_token
+      - TARGET_DB_CREDENTIALS_FILE_PATH=/run/share/target_client_credentials
+    volumes:
+      - ./share:/run/share/
+    networks:
+      proxy:
+
+  change-zdmproxy-config:
+    image: ubuntu:20.04
+    volumes:
+      - ./share:/run/share/
+      - ./services/change-zdmproxy-config/:/opt/change-zdmproxy-config/
+    entrypoint:
+      - /opt/change-zdmproxy-config/change-zdmproxy-config-entrypoint.sh
+
+  reset-share-dir:
+    image: ubuntu:20.04
+    volumes:
+      - ./share:/run/share/
+      - ./services/reset-share-dir/:/opt/reset-share-dir/
+    entrypoint:
+      - /opt/reset-share-dir/reset-share-dir-entrypoint.sh

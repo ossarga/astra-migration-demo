@@ -1,0 +1,43 @@
+{
+  "client": {
+    "name": "client",
+    "policy": {
+      "description": "Client Role",
+      "resources": [
+        "drn:astra:org:##ASTRA_ORG_ID##",
+        "drn:astra:org:##ASTRA_ORG_ID##:db:*",
+        "drn:astra:org:##ASTRA_ORG_ID##:db:##ASTRA_DB_ID##:keyspace:##ASTRA_KEYSPACE_NAME##",
+        "drn:astra:org:##ASTRA_ORG_ID##:db:##ASTRA_DB_ID##:keyspace:##ASTRA_KEYSPACE_NAME##:table:*",
+        "drn:astra:org:##ASTRA_ORG_ID##:db:##ASTRA_DB_ID##:keyspace:system_virtual_schema:table:*"
+      ],
+      "actions": [
+        "accesslist-read",
+        "org-user-read",
+        "org-db-view",
+        "db-cql",
+        "db-all-keyspace-describe",
+        "db-keyspace-describe",
+        "db-table-describe",
+        "db-table-select",
+        "db-table-modify"
+      ],
+      "effect": "allow"
+    }
+  },
+  "zdmproxy": {
+    "name": "zdmproxy",
+    "policy": {
+      "description": "ZDM Proxy Role",
+      "resources": [
+        "drn:astra:org:##ASTRA_ORG_ID##",
+        "drn:astra:org:##ASTRA_ORG_ID##:db:*"
+      ],
+      "actions": [
+        "org-db-view",
+        "org-user-read",
+        "db-cql"
+      ],
+      "effect": "allow"
+    }
+  }
+}

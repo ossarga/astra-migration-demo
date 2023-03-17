@@ -1,0 +1,192 @@
+#!/bin/bash
+
+# Exit on error, error if variable is undefined, prevent errors in a pipeline being masked
+set -euo pipefail
+
+ERR_MSG=""
+ERR_MSG_ALT=""
+
+# Catch when we are about to exit and display the error
+trap "trap_exit" EXIT
+
+error_exit() {
+    [ "$#" -gt 0 ] && ERR_MSG="$1"
+    [ "$#" -gt 1 ] && ERR_MSG_ALT="$2"
+    exit 1
+}
+
+trap_exit() {
+    local rtn_code=$?
+    local err_msg="$ERR_MSG"
+    local err_msg_out="ERROR"
+    local bash_cmd=""
+
+    if [ $rtn_code -eq 0  ]
+    then
+        return 0
+    fi
+
+    if [ "$err_msg" = "null" ]
+    then
+        err_msg="$ERR_MSG_ALT"
+    fi
+
+    if [ -n "$err_msg" ]
+    then
+        err_msg_out="$err_msg_out $err_msg."
+    fi
+
+    if [ "$(cut -d' ' -f1 <<<"$BASH_COMMAND")"  = "exit" ]
+    then
+        err_msg_out="$err_msg_out Failed"
+    else
+        err_msg_out="$err_msg_out Command '$BASH_COMMAND' failed"
+    fi
+
+    err_msg_out="$err_msg_out with exit code $rtn_code."
+
+    echo "$err_msg_out" >&2
+}
+
+call_dev_ops_api_resource() {
+    # 1 - request type (GET, POST, DELETE)
+    # 2 - resource path
+    # 3 - token to authenticate the api request
+    # 4 - json string or file payload
+    local request_type="$1"
+    local resource_path="$2"
+    local api_token="$3"
+
+    local curl_cmd=(
+        "curl"
+        "${ASTRA_API_URL}/${resource_path}"
+        "-s"
+        "--header \"Authorization: Bearer $api_token\""
+        "--header \"Content-Type: application/json\""
+        "--request $request_type"
+    )
+
+    eval "${curl_cmd[*]}"
+}
+
+get_init_token() {
+    local init_token_file_path="$1"
+    local init_token=""
+    local init_token_rtn="$2"
+
+    if [ -f "$init_token_file_path" ]
+    then
+        init_token=$(cat "$init_token_file_path")
+        if [ -z "$init_token" ] || [ "${init_token//:*/}" != "AstraCS" ]
+        then
+            error_exit "Invalid token contained in '$init_token_file_path' file."
+        fi
+    else
+        error_exit "Unable to find the specified init token file path '$init_token_file_path'"
+    fi
+
+    eval "$init_token_rtn=$init_token"
+}
+
+get_db_id() {
+    local db_name="$1"
+    local init_token="$2"
+    local db_id=""
+    local db_id_rtn="$3"
+    local api_response=""
+
+    if ! api_response=$(call_dev_ops_api_resource "GET" "v2/databases" "$init_token")
+    then
+        error_exit "Failed to retrieve list of databases."
+    else
+        if [ "$api_response" = "null" ] || [ "$(jq ".[].id?" <<<"$api_response" | wc -l)" -eq 0 ]
+        then
+            local error_msg=($(jq -r '.errors? | .[0].message' <<<"$api_response"))
+            error_exit "${error_msg[*]}" "No databases found in account!"
+        else
+            db_id=$(jq -r ".[] | select(.info.name==\"${db_name}\") | .id" <<<"$api_response")
+            if [ -z "$db_id" ]
+            then
+                error_exit "No database named $db_name found in account"
+            fi
+        fi
+    fi
+
+    eval "$db_id_rtn=$db_id"
+}
+
+get_download_path() {
+    local db_name="$1"
+    local db_id="$2"
+    local scb_download_dir_path="$3"
+    local scb_download_dir_path_rtn="$4"
+
+    if [ ! -d "$scb_download_dir_path" ]
+    then
+        error_exit "Unable to find specified download directory '$scb_download_dir_path'."
+    fi
+
+    eval "$scb_download_dir_path_rtn=${scb_download_dir_path}/${db_name}_${db_id}_scb.zip"
+}
+
+get_download_url() {
+    local db_id="$1"
+    local init_token="$2"
+    local scb_url=""
+    local scb_url_rtn="$3"
+    local api_response=""
+
+    if ! api_response=$(call_dev_ops_api_resource "POST" "v2/databases/${db_id}/secureBundleURL" "$init_token")
+    then
+        error_exit "Failed to get secure connect bundle download URL for '${db_id}'."
+    else
+        scb_url=$(jq -r '.downloadURL?' <<<"$api_response")
+        if [ "$scb_url" = "null" ]
+        then
+            local error_msg=($(jq -r '.errors? | .[0].message' <<<"$api_response"))
+            error_exit \
+              "${error_msg[*]}" \
+              "Response contained no URL to secure connect bundle for '${db_id}'. $(jq '.' <<<"$api_response")"
+        fi
+    fi
+
+    eval "$scb_url_rtn=\"$scb_url\""
+}
+
+get_secure_connect_bundle_archive() {
+    local scb_url="$1"
+    local scb_file_path="$2"
+
+    if curl "$scb_url" -s --request GET --output "${scb_file_path}" && [ -f "${scb_file_path}" ]
+    then
+        echo "$scb_file_path"
+    else
+        error_exit "Failed to download secure connect bundle using URL '${scb_url//\?*/}'."
+    fi
+}
+
+run_main() {
+    local astra_db_name="$1"
+    local astra_init_token_file_path="$2"
+    local astra_scb_download_dir_path="$3"
+    local astra_init_token=""
+    local astra_db_id=""
+    local astra_scb_download_path=""
+    local astra_scb_url=""
+
+    get_init_token "$astra_init_token_file_path" "astra_init_token"
+    get_db_id "$astra_db_name" "$astra_init_token" "astra_db_id"
+    get_download_path "$astra_db_name" "$astra_db_id" "$astra_scb_download_dir_path" "astra_scb_download_path"
+    get_download_url "$astra_db_id" "$astra_init_token" "astra_scb_url"
+
+    get_secure_connect_bundle_archive "$astra_scb_url" "$astra_scb_download_path"
+}
+
+#--- main execution ----------------------------------------------------------------------------------------------------
+# 1 - [required] Astra DB name associated with the secure connect bundle
+# 2 - [required] Path to file containing token that will be used to download secure connect bundle
+# 3 - [required] Path to directory to place the secure connect bundle in
+
+export ASTRA_API_URL="https://api.astra.datastax.com"
+
+run_main "$1" "$2" "$3"

@@ -1,0 +1,16 @@
+{
+  "client": {
+    "name": "Client Role",
+    "policy": {
+      "privilege": ["SELECT", "MODIFY"],
+      "resource_name": "TABLE demo_keyspace.demo_table"
+    }
+  },
+  "zdmproxy": {
+    "name": "ZDM Proxy Role",
+    "policy": {
+      "privilege": ["SELECT", "MODIFY"],
+      "resource_name": "KEYSPACE demo_keyspace"
+    }
+  }
+}

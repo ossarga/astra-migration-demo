@@ -1,0 +1,35 @@
+#!/bin/bash
+
+service_info_json=$(curl -s --unix-socket /run/docker.sock "http://docker/containers/$HOSTNAME/json")
+project_name=$(jq -r '.Config.Labels."com.docker.compose.project"' <<<"$service_info_json")
+service_full_name=$(jq -r '.Name' <<<"$service_info_json")
+
+service_name="${service_full_name//\/${project_name}-/}"
+service_connection_info="$1"
+
+export SERVICE_NAME="$service_name"
+
+hosts_file_lock_free="${SERVICE_RUN_SHARE_DIR}/.hosts_lock.free"
+hosts_file_lock_acquired="${SERVICE_RUN_SHARE_DIR}/.hosts_lock.acquired"
+
+while ! mv "$hosts_file_lock_free" "$hosts_file_lock_acquired" > /dev/null 2>&1
+do
+    wait_time="$(shuf -i 1-30 -n 1)"
+    echo "Unable to get lock to write to $SERVICE_HOSTS_FILE, trying again in ${wait_time}s"
+    sleep "$wait_time"
+done
+
+if [ ! -f "$SERVICE_HOSTS_FILE" ]
+then
+    sleep "$(shuf -i 1-10 -n 1)"
+    echo "$service_name:$service_connection_info" > "$SERVICE_HOSTS_FILE"
+else
+    if ! grep -q "$service_name" "$SERVICE_HOSTS_FILE"
+    then
+        echo "$service_name:$service_connection_info" >> "$SERVICE_HOSTS_FILE"
+    else
+        sed -i "s,^$service_name:.*,$service_name:$service_connection_info,g" "$SERVICE_HOSTS_FILE"
+    fi
+fi
+
+mv "$hosts_file_lock_acquired" "$hosts_file_lock_free"
